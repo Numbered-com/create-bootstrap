@@ -1,0 +1,24 @@
+{
+	"name": "@numbered/create-studio",
+	"version": "1.0.0",
+	"description": "Scaffold a new Numbered Studio project",
+	"type": "module",
+	"bin": {
+		"create-numbered-studio": "./bin/index.js"
+	},
+	"files": ["bin", "src"],
+	"scripts": {
+		"dev": "node bin/index.js",
+		"build": "echo 'No build step needed'"
+	},
+	"dependencies": {
+		"@clack/prompts": "^0.10.0",
+		"picocolors": "^1.1.1"
+	},
+	"publishConfig": {
+		"access": "restricted"
+	},
+	"engines": {
+		"node": ">=18"
+	}
+}
