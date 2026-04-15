@@ -13,8 +13,8 @@ ${pc.cyan(`  _   _                 _                        _
 const TEMPLATES = {
 	nextjs: {
 		label: 'Next.js + Sanity',
-		repo: 'git@github.com-pro:Numbered-com/proper.git',
-		branch: 'main',
+		repo: 'git@github.com-pro:Numbered-com/bootstrap.git',
+		branch: 'chore/update-2026',
 	},
 	// Add more templates here:
 	shopify: {
