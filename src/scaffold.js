@@ -18,14 +18,27 @@ export async function scaffold({ projectName, template, grid, installDeps }) {
 	const s = p.spinner()
 	s.start(`Cloning ${template.label} template...`)
 
+	const httpsRepo = template.repo.replace(/^git@github\.com:/, 'https://github.com/')
+	let cloned = false
+
 	try {
 		execSync(`git clone --depth 1 --branch ${template.branch} ${template.repo} ${projectName}`, {
 			stdio: 'pipe',
 		})
-	} catch (err) {
-		s.stop('Clone failed.')
-		p.log.error(`Failed to clone template repo.\n${err.stderr?.toString() || err.message}`)
-		process.exit(1)
+		cloned = true
+	} catch {
+		s.message('SSH clone failed, trying HTTPS...')
+		try {
+			execSync(`git clone --depth 1 --branch ${template.branch} ${httpsRepo} ${projectName}`, {
+				stdio: 'pipe',
+			})
+			cloned = true
+		} catch (err) {
+			s.stop('Clone failed.')
+			p.log.error(`Failed to clone template repo.\n${err.stderr?.toString() || err.message}`)
+			p.log.info('Make sure you have access to the Numbered-com GitHub org.')
+			process.exit(1)
+		}
 	}
 
 	s.stop('Template cloned.')

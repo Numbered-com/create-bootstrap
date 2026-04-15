@@ -1,6 +1,27 @@
+import { execSync } from 'node:child_process'
+import { createRequire } from 'node:module'
 import * as p from '@clack/prompts'
 import pc from 'picocolors'
 import { scaffold } from './scaffold.js'
+
+const require = createRequire(import.meta.url)
+const { version } = require('../package.json')
+
+function checkPrerequisites() {
+	const missing = []
+	for (const cmd of ['git', 'bun']) {
+		try {
+			execSync(`which ${cmd}`, { stdio: 'pipe' })
+		} catch {
+			missing.push(cmd)
+		}
+	}
+	if (missing.length > 0) {
+		p.log.error(`Missing required tools: ${missing.join(', ')}`)
+		p.log.info('Install bun: https://bun.sh')
+		process.exit(1)
+	}
+}
 
 const BANNER = `
 ${pc.cyan(`  _   _                 _                        _
@@ -32,7 +53,9 @@ const DEFAULT_GRID = {
 
 export async function main() {
 	console.log(BANNER)
-	p.intro(pc.bgCyan(pc.black(' create-numbered-studio ')))
+	p.intro(`${pc.bgCyan(pc.black(' create-numbered-studio '))} ${pc.dim(`v${version}`)}`)
+
+	checkPrerequisites()
 
 	const answers = await p.group(
 		{
