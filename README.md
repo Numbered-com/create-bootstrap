@@ -1,11 +1,11 @@
-# create-numbered-studio
+# create-bootstrap
 
 CLI to scaffold a new Numbered Studio project — Next.js + Sanity or Shopify Liquid, with Figma grid config baked in.
 
 ## Usage
 
 ```bash
-npx github:Numbered-com/create-numbered-studio
+npx github:Numbered-com/create-bootstrap
 ```
 
 ## What it does

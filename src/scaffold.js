@@ -1,12 +1,13 @@
-import { execSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execSync, spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import { copyFileSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import * as p from "@clack/prompts";
 
 /**
- * @param {{ projectName: string, template: { repo: string, branch: string, label: string }, grid: object, installDeps: boolean, ecommerceSupport: boolean }} options
+ * @param {{ projectName: string, template: { repo: string, branch: string, label: string }, grid: object, installDeps: boolean, ecommerceSupport: boolean, createSanityProject: boolean }} options
  */
-export async function scaffold({ projectName, template, grid, installDeps, ecommerceSupport }) {
+export async function scaffold({ projectName, template, grid, installDeps, ecommerceSupport, createSanityProject }) {
 	const targetDir = resolve(process.cwd(), projectName);
 
 	if (existsSync(targetDir)) {
@@ -26,21 +27,19 @@ export async function scaffold({ projectName, template, grid, installDeps, ecomm
 	try {
 		execSync(
 			`git clone --depth 1 --branch ${template.branch} ${template.repo} ${projectName}`,
-			{
-				stdio: "pipe",
-			},
+			{ stdio: "pipe" },
 		);
-		cloned = true;
 	} catch {
+		// Clean up partial clone before HTTPS fallback
+		if (existsSync(targetDir)) {
+			rmSync(targetDir, { recursive: true, force: true });
+		}
 		s.message("SSH clone failed, trying HTTPS...");
 		try {
 			execSync(
 				`git clone --depth 1 --branch ${template.branch} ${httpsRepo} ${projectName}`,
-				{
-					stdio: "pipe",
-				},
+				{ stdio: "pipe" },
 			);
-			cloned = true;
 		} catch (err) {
 			s.stop("Clone failed.");
 			p.log.error(
@@ -91,13 +90,73 @@ export async function scaffold({ projectName, template, grid, installDeps, ecomm
 		}
 	}
 
+	// Create Sanity project
+	if (createSanityProject) {
+		p.log.step("Authenticating with Sanity...");
+
+		// Ensure user is logged in (interactive)
+		const loginResult = spawnSync(
+			"bunx",
+			["sanity@latest", "login"],
+			{ cwd: targetDir, stdio: "inherit", timeout: 300_000 },
+		);
+
+		if (loginResult.status !== 0) {
+			p.log.error("Sanity login failed.");
+			process.exit(1);
+		}
+
+		p.log.step("Creating Sanity project...");
+
+		const result = spawnSync(
+			"bunx",
+			["sanity@latest", "projects", "create", projectName, "--dataset=production", "--json", "-y"],
+			{ cwd: targetDir, stdio: ["inherit", "pipe", "inherit"], timeout: 120_000 },
+		);
+
+		if (result.status !== 0 || !result.stdout) {
+			p.log.error("Sanity project creation failed.");
+			process.exit(1);
+		}
+
+		const rawOutput = result.stdout.toString().trim();
+		let projectId;
+		try {
+			// Try to extract JSON from output (may contain extra text)
+			const jsonMatch = rawOutput.match(/\{[\s\S]*\}/);
+			const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : rawOutput);
+			projectId = parsed.projectId || parsed.id;
+		} catch {
+			// Fallback: try to extract project ID with regex
+			const idMatch = rawOutput.match(/[a-z0-9]{8,}/i);
+			projectId = idMatch?.[0];
+		}
+
+		if (!projectId) {
+			p.log.error("Could not parse Sanity output:");
+			p.log.info(rawOutput || "(empty)");
+			process.exit(1);
+		}
+
+		p.log.success(`Sanity project created: ${projectId}`);
+
+		// Copy .env.sample to .env.local and populate
+		const envLocalCreated = createEnvLocal(targetDir, projectName, projectId);
+		if (envLocalCreated) {
+			p.log.success(`Created .env.local with project config`);
+			p.log.info(
+				`Create SANITY_API_TOKEN at: https://www.sanity.io/manage/project/${projectId}/api#tokens`,
+			);
+		}
+	}
+
 	// Summary
 	p.log.info(`\nProject created at ${targetDir}`);
 	p.note(
 		[
 			`cd ${projectName}`,
 			!installDeps ? "bun install" : null,
-			"cp .env.sample .env.local  # configure your env vars",
+			!createSanityProject ? "cp .env.sample .env.local  # configure your env vars" : null,
 			"bun run dev",
 		]
 			.filter(Boolean)
@@ -240,6 +299,35 @@ function removeShopifyFromPackageJson(pkgPath, patterns) {
 	if (modified) {
 		writeFileSync(pkgPath, JSON.stringify(pkg, null, "\t") + "\n");
 	}
+}
+
+function createEnvLocal(targetDir, projectName, projectId) {
+	const samplePath = resolve(targetDir, ".env.sample");
+	const localPath = resolve(targetDir, ".env.local");
+	if (!existsSync(samplePath)) return false;
+
+	copyFileSync(samplePath, localPath);
+
+	const vars = {
+		NEXT_PUBLIC_BASE_URL: "https://web.localhost",
+		NEXT_PUBLIC_SANITY_DATASET: "production",
+		NEXT_PUBLIC_SANITY_PROJECT_ID: projectId,
+		SANITY_STUDIO_PROJECT_ID: projectId,
+		SANITY_STUDIO_HOST: projectName,
+		SANITY_WEBHOOK_SECRET: randomBytes(32).toString("hex"),
+	};
+
+	let content = readFileSync(localPath, "utf-8");
+	for (const [key, value] of Object.entries(vars)) {
+		const regex = new RegExp(`^${key}=.*$`, "m");
+		if (regex.test(content)) {
+			content = content.replace(regex, `${key}=${value}`);
+		} else {
+			content += `\n${key}=${value}`;
+		}
+	}
+	writeFileSync(localPath, content);
+	return true;
 }
 
 function cleanupSanityConstants(targetDir) {

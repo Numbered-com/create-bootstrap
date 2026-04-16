@@ -35,7 +35,7 @@ const TEMPLATES = {
 	nextjs: {
 		label: 'Next.js + Sanity',
 		repo: 'git@github.com:Numbered-com/bootstrap.git',
-		branch: 'chore/update-2026',
+		branch: 'staging',
 	},
 	// Add more templates here:
 	shopify: {
@@ -53,7 +53,7 @@ const DEFAULT_GRID = {
 
 export async function main() {
 	console.log(BANNER)
-	p.intro(`${pc.bgCyan(pc.black(' create-numbered-studio '))} ${pc.dim(`v${version}`)}`)
+	p.intro(`${pc.bgCyan(pc.black(' create-bootstrap '))} ${pc.dim(`v${version}`)}`)
 
 	checkPrerequisites()
 
@@ -199,6 +199,19 @@ export async function main() {
 		process.exit(0)
 	}
 
+	// Sanity project creation (only for nextjs template)
+	let createSanityProject = false
+	if (answers.template === 'nextjs') {
+		createSanityProject = await p.confirm({
+			message: 'Create a new Sanity project?',
+			initialValue: true,
+		})
+		if (p.isCancel(createSanityProject)) {
+			p.cancel('Cancelled.')
+			process.exit(0)
+		}
+	}
+
 	const templateConfig = TEMPLATES[answers.template]
 
 	await scaffold({
@@ -207,6 +220,7 @@ export async function main() {
 		grid,
 		installDeps,
 		ecommerceSupport,
+		createSanityProject,
 	})
 
 	p.outro(pc.green(`Done! cd ${answers.projectName} and start building.`))

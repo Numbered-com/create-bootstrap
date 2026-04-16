@@ -4,7 +4,7 @@
 	"description": "Scaffold a new Numbered Studio project",
 	"type": "module",
 	"bin": {
-		"create-numbered-studio": "./bin/index.js"
+		"create-bootstrap": "./bin/index.js"
 	},
 	"files": ["bin", "src"],
 	"scripts": {
