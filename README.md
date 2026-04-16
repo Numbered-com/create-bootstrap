@@ -31,6 +31,7 @@ It then:
 ```bash
 cd my-project
 cp .env.sample .env.local  # configure your env vars
+bun i
 bun run dev
 ```
 
@@ -38,5 +39,5 @@ bun run dev
 
 | Key | Label | Repo |
 |-----|-------|------|
-| `nextjs` | Next.js + Sanity | `Numbered-com/proper` |
+| `nextjs` | Next.js + Sanity | `Numbered-com/bootstrap` |
 | `shopify` | Shopify Liquid | `Numbered-com/jolie` |
