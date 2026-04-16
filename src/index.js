@@ -84,6 +84,19 @@ export async function main() {
 		{ onCancel: () => (p.cancel('Cancelled.'), process.exit(0)) },
 	)
 
+	// Ecommerce support prompt (only for nextjs template)
+	let ecommerceSupport = false
+	if (answers.template === 'nextjs') {
+		ecommerceSupport = await p.confirm({
+			message: 'Include Shopify ecommerce support?',
+			initialValue: false,
+		})
+		if (p.isCancel(ecommerceSupport)) {
+			p.cancel('Cancelled.')
+			process.exit(0)
+		}
+	}
+
 	// Grid configuration
 	let grid = DEFAULT_GRID
 	if (answers.configureGrid) {
@@ -193,6 +206,7 @@ export async function main() {
 		template: templateConfig,
 		grid,
 		installDeps,
+		ecommerceSupport,
 	})
 
 	p.outro(pc.green(`Done! cd ${answers.projectName} and start building.`))
