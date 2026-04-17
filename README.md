@@ -55,13 +55,14 @@ If you skipped the Sanity step, copy `.env.sample` to `.env.local` and fill in t
 
 ## Releasing
 
-The package auto-publishes to npm on version tags. From `staging`:
+From `staging`:
 
 ```bash
-npm version patch   # or minor / major
-git push --follow-tags
+bun run release          # patch (default)
+bun run release:minor
+bun run release:major
 ```
 
-The `.github/workflows/publish.yml` action runs on `v*` tags and publishes with provenance.
+Each script bumps the version, commits, tags (`v*`), and pushes — the `postversion` hook auto-runs `git push --follow-tags`. The `.github/workflows/publish.yml` action picks up the tag and publishes to npm with provenance.
 
-**One-time setup:** add an `NPM_TOKEN` secret to the repo (npm → Access Tokens → Automation token with publish rights to `@numbered`).
+**One-time setup:** add an `NPM_TOKEN` repository secret (npm → Access Tokens → Automation token with publish rights to `@numbered`).

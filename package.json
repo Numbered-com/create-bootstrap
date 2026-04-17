@@ -15,7 +15,11 @@
 		"url": "git+https://github.com/Numbered-com/create-bootstrap.git"
 	},
 	"scripts": {
-		"dev": "node bin/index.js"
+		"dev": "node bin/index.js",
+		"release": "npm version patch",
+		"release:minor": "npm version minor",
+		"release:major": "npm version major",
+		"postversion": "git push --follow-tags"
 	},
 	"dependencies": {
 		"@clack/prompts": "^1.2.0",
