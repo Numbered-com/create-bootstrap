@@ -5,7 +5,9 @@ CLI to scaffold a new Numbered Studio project — Next.js + Sanity or Shopify Li
 ## Usage
 
 ```bash
-npx github:Numbered-com/create-bootstrap
+npx @numbered/create-bootstrap
+# or
+bunx @numbered/create-bootstrap
 ```
 
 Re-run it on an existing directory to resume setup — the CLI detects the project type and skips steps that are already done (Sanity project, GitHub repo, etc.).
@@ -50,3 +52,16 @@ bun run dev
 ```
 
 If you skipped the Sanity step, copy `.env.sample` to `.env.local` and fill in the values manually.
+
+## Releasing
+
+The package auto-publishes to npm on version tags. From `staging`:
+
+```bash
+npm version patch   # or minor / major
+git push --follow-tags
+```
+
+The `.github/workflows/publish.yml` action runs on `v*` tags and publishes with provenance.
+
+**One-time setup:** add an `NPM_TOKEN` secret to the repo (npm → Access Tokens → Automation token with publish rights to `@numbered`).

@@ -1,22 +1,26 @@
 {
-	"name": "@numbered/create-studio",
+	"name": "@numbered/create-bootstrap",
 	"version": "1.0.0",
-	"description": "Scaffold a new Numbered Studio project",
+	"description": "Scaffold a new Numbered Studio project (Next.js + Sanity or Shopify Liquid) with full Sanity/GitHub/Vercel setup.",
 	"type": "module",
 	"bin": {
 		"create-bootstrap": "./bin/index.js"
 	},
 	"files": ["bin", "src"],
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/Numbered-com/create-bootstrap.git"
+	},
 	"scripts": {
-		"dev": "node bin/index.js",
-		"build": "echo 'No build step needed'"
+		"dev": "node bin/index.js"
 	},
 	"dependencies": {
 		"@clack/prompts": "^1.2.0",
 		"picocolors": "^1.1.1"
 	},
 	"publishConfig": {
-		"access": "restricted"
+		"access": "public",
+		"provenance": true
 	},
 	"engines": {
 		"node": ">=22"
