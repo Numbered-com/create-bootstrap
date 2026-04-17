@@ -18,7 +18,19 @@ jobs:
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
+          scope: "@numbered"
+          always-auth: true
 
-      - run: npm publish
+      - name: Verify NPM_TOKEN is set
+        run: |
+          if [ -z "${NODE_AUTH_TOKEN}" ]; then
+            echo "::error::NPM_TOKEN secret is missing or empty"
+            exit 1
+          fi
+          echo "NPM_TOKEN length: ${#NODE_AUTH_TOKEN}"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
