@@ -1,82 +1,85 @@
-import { execSync, spawnSync } from "node:child_process";
+import { execSync, spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { copyFileSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import * as p from "@clack/prompts";
 
+const GITHUB_ORG = "Numbered-com";
+const VERCEL_SCOPE = "numbered-sandbox";
+const PREVIEW_DOMAIN_SUFFIX = "numbered.studio";
+const LOCAL_BASE_URL = "https://web.localhost";
+const VERCEL_ENV = { ...process.env, CI: "1" };
+const MIN_VERCEL_VERSION = 51;
+
 /**
- * @param {{ projectName: string, projectTitle: string, template: { repo: string, branch: string, label: string }, grid: object, installDeps: boolean, ecommerceSupport: boolean, createSanityProject: boolean }} options
+ * @param {{ projectName: string, projectTitle: string, template: { repo: string, branch: string, label: string }, grid: object, installDeps: boolean, ecommerceSupport: boolean, createSanityProject: boolean, createGithubRepo: boolean, createVercelProject: boolean, isExisting: boolean }} options
  */
-export async function scaffold({ projectName, projectTitle, template, grid, installDeps, ecommerceSupport, createSanityProject }) {
+export async function scaffold({ projectName, projectTitle, template, grid, installDeps, ecommerceSupport, createSanityProject, createGithubRepo, createVercelProject, isExisting }) {
 	const targetDir = resolve(process.cwd(), projectName);
-
-	if (existsSync(targetDir)) {
-		p.log.error(`Directory "${projectName}" already exists.`);
-		process.exit(1);
-	}
-
-	// Clone the template repo
 	const s = p.spinner();
-	s.start(`Cloning ${template.label} template...`);
 
-	const httpsRepo = template.repo.replace(
-		/^git@github\.com:/,
-		"https://github.com/",
-	);
+	if (!isExisting) {
+		s.start(`Cloning ${template.label} template...`);
 
-	try {
-		execSync(
-			`git clone --depth 1 --branch ${template.branch} ${template.repo} ${projectName}`,
-			{ stdio: "pipe" },
+		const httpsRepo = template.repo.replace(
+			/^git@github\.com:/,
+			"https://github.com/",
 		);
-	} catch {
-		if (existsSync(targetDir)) {
-			rmSync(targetDir, { recursive: true, force: true });
-		}
-		s.message("SSH clone failed, trying HTTPS...");
+
 		try {
 			execSync(
-				`git clone --depth 1 --branch ${template.branch} ${httpsRepo} ${projectName}`,
+				`git clone --depth 1 --branch ${template.branch} ${template.repo} ${projectName}`,
 				{ stdio: "pipe" },
 			);
-		} catch (err) {
-			s.stop("Clone failed.");
-			p.log.error(
-				`Failed to clone template repo.\n${err.stderr?.toString() || err.message}`,
-			);
-			p.log.info("Make sure you have access to the Numbered-com GitHub org.");
-			process.exit(1);
-		}
-	}
-
-	s.stop("Template cloned.");
-
-	rmSync(resolve(targetDir, ".git"), { recursive: true, force: true });
-	execSync("git init", { cwd: targetDir, stdio: "pipe" });
-	p.log.success("Git initialized (clean history).");
-
-	s.start("Configuring project...");
-	updatePackageName(targetDir, projectName);
-	updateSanityTitle(targetDir, projectTitle);
-	writeGridConfig(targetDir, grid);
-	removeSecrets(targetDir);
-	if (!ecommerceSupport) {
-		removeShopifyEcommerce(targetDir);
-	}
-	s.stop("Project configured.");
-
-	if (installDeps) {
-		s.start("Installing dependencies with bun...");
-		try {
-			execSync("bun install", {
-				cwd: targetDir,
-				stdio: "pipe",
-				timeout: 120_000,
-			});
-			s.stop("Dependencies installed.");
 		} catch {
-			s.stop("Install failed.");
-			p.log.warn("bun install failed. Run it manually after setup.");
+			if (existsSync(targetDir)) {
+				rmSync(targetDir, { recursive: true, force: true });
+			}
+			s.message("SSH clone failed, trying HTTPS...");
+			try {
+				execSync(
+					`git clone --depth 1 --branch ${template.branch} ${httpsRepo} ${projectName}`,
+					{ stdio: "pipe" },
+				);
+			} catch (err) {
+				s.stop("Clone failed.");
+				p.log.error(
+					`Failed to clone template repo.\n${err.stderr?.toString() || err.message}`,
+				);
+				p.log.info(`Make sure you have access to the ${GITHUB_ORG} GitHub org.`);
+				process.exit(1);
+			}
+		}
+
+		s.stop("Template cloned.");
+
+		rmSync(resolve(targetDir, ".git"), { recursive: true, force: true });
+		execSync("git init", { cwd: targetDir, stdio: "pipe" });
+		p.log.success("Git initialized (clean history).");
+
+		s.start("Configuring project...");
+		updatePackageName(targetDir, projectName);
+		updateSanityTitle(targetDir, projectTitle);
+		writeGridConfig(targetDir, grid);
+		removeSecrets(targetDir);
+		if (!ecommerceSupport) {
+			removeShopifyEcommerce(targetDir);
+		}
+		s.stop("Project configured.");
+
+		if (installDeps) {
+			s.start("Installing dependencies with bun...");
+			try {
+				execSync("bun install", {
+					cwd: targetDir,
+					stdio: "pipe",
+					timeout: 120_000,
+				});
+				s.stop("Dependencies installed.");
+			} catch {
+				s.stop("Install failed.");
+				p.log.warn("bun install failed. Run it manually after setup.");
+			}
 		}
 	}
 
@@ -142,6 +145,24 @@ export async function scaffold({ projectName, projectTitle, template, grid, inst
 		}
 	}
 
+	if (createGithubRepo) {
+		createGithubRepository(targetDir, projectName);
+	}
+
+	if (createVercelProject) {
+		linkVercelProject(targetDir, projectName);
+		const projectId = readVercelProjectId(targetDir);
+		if (!projectId) {
+			p.log.warn("Could not read Vercel projectId — skipping env/domain setup.");
+		} else {
+			await Promise.all([
+				setVercelRootDirectory(targetDir, projectId, "apps/web"),
+				pushEnvToVercel(targetDir, projectId, projectName),
+				addVercelPreviewDomain(targetDir, projectId, projectName),
+			]);
+		}
+	}
+
 	p.log.info(`\nProject created at ${targetDir}`);
 	p.note(
 		[
@@ -166,10 +187,11 @@ function updatePackageName(targetDir, projectName) {
 }
 
 function updateSanityTitle(targetDir, title) {
+	const escaped = title.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
 	editFile(resolve(targetDir, "apps/sanity/sanity.config.tsx"), [
 		[
 			/(name:\s*['"]production['"],\s*title:\s*)['"][^'"]*['"]/,
-			`$1'${title.replace(/'/g, "\\'")}'`,
+			`$1'${escaped}'`,
 		],
 	]);
 }
@@ -312,25 +334,239 @@ function removeShopifyFromPackageJson(pkgPath, patterns) {
 	}
 }
 
+function createGithubRepository(targetDir, projectName) {
+	try {
+		execSync("gh auth status", { stdio: "pipe" });
+	} catch {
+		p.log.error("gh CLI not installed or not authenticated. Run 'gh auth login' and retry.");
+		process.exit(1);
+	}
+
+	if (!existsSync(resolve(targetDir, ".git"))) {
+		execSync("git init -b main", { cwd: targetDir, stdio: "pipe" });
+	} else {
+		try {
+			execSync("git symbolic-ref HEAD refs/heads/main", { cwd: targetDir, stdio: "pipe" });
+		} catch {}
+	}
+
+	try {
+		execSync("git add .", { cwd: targetDir, stdio: "pipe" });
+		execSync("git diff --cached --quiet", { cwd: targetDir, stdio: "pipe" });
+	} catch {
+		p.log.step("Committing on main...");
+		try {
+			execSync('git commit -m "first commit"', { cwd: targetDir, stdio: "pipe" });
+		} catch (err) {
+			p.log.error(`Git commit failed: ${err.stderr?.toString() || err.message}`);
+			process.exit(1);
+		}
+	}
+
+	const fullRepo = `${GITHUB_ORG}/${projectName}`;
+	p.log.step(`Creating private repo ${fullRepo}...`);
+	const result = spawnSync(
+		"gh",
+		["repo", "create", fullRepo, "--private", "--source=.", "--remote=origin", "--push"],
+		{ cwd: targetDir, stdio: "inherit", timeout: 120_000 },
+	);
+	if (result.status !== 0) {
+		p.log.error("GitHub repo creation failed.");
+		process.exit(1);
+	}
+	p.log.success(`Repo pushed to main: https://github.com/${fullRepo}`);
+
+	p.log.step("Creating staging branch...");
+	try {
+		execSync("git checkout -b staging", { cwd: targetDir, stdio: "pipe" });
+		execSync("git push -u origin staging", { cwd: targetDir, stdio: "pipe" });
+		p.log.success("Checked out on staging.");
+	} catch (err) {
+		p.log.warn(`Could not create staging branch: ${err.stderr?.toString() || err.message}`);
+	}
+}
+
+function ensureVercelInstalled() {
+	try {
+		const version = execSync("vercel --version", { stdio: "pipe" }).toString().trim();
+		const major = parseInt(version.split(".")[0], 10);
+		if (major >= MIN_VERCEL_VERSION) return;
+	} catch {}
+
+	p.log.step("Installing Vercel CLI globally...");
+	try {
+		execSync("bun add -g vercel@latest", { stdio: "pipe", timeout: 180_000 });
+	} catch (err) {
+		p.log.error(`Failed to install Vercel CLI: ${err.stderr?.toString() || err.message}`);
+		process.exit(1);
+	}
+}
+
+function linkVercelProject(targetDir, projectName) {
+	ensureVercelInstalled();
+
+	p.log.step(`Linking Vercel project ${projectName} (scope: ${VERCEL_SCOPE})...`);
+	const result = spawnSync(
+		"vercel",
+		["link", "--yes", "--project", projectName, "--scope", VERCEL_SCOPE],
+		{ cwd: targetDir, stdio: "inherit", timeout: 300_000, env: VERCEL_ENV },
+	);
+	if (result.status !== 0) {
+		p.log.error("Vercel link failed.");
+		process.exit(1);
+	}
+}
+
+function readVercelProjectId(targetDir) {
+	const projectJsonPath = resolve(targetDir, ".vercel/project.json");
+	try {
+		return JSON.parse(readFileSync(projectJsonPath, "utf-8")).projectId || null;
+	} catch {
+		return null;
+	}
+}
+
+// method: "GET"|"POST"|"PATCH"|...; body: object (sent as JSON via stdin) or array of ["-F", "k=v"] pairs
+function vercelApi(targetDir, method, path, body) {
+	const args = ["api", path, "-X", method, "--scope", VERCEL_SCOPE];
+	let input;
+	if (Array.isArray(body)) {
+		args.push(...body);
+	} else if (body) {
+		args.push("--input", "-");
+		input = JSON.stringify(body);
+	}
+	return spawnAsync("vercel", args, { cwd: targetDir, input, env: VERCEL_ENV });
+}
+
+async function setVercelRootDirectory(targetDir, projectId, rootDirectory) {
+	p.log.step(`Setting Vercel root directory to ${rootDirectory}...`);
+	// v9 endpoint: rootDirectory not yet supported on v10 PATCH
+	const { status, stderr } = await vercelApi(targetDir, "PATCH", `/v9/projects/${projectId}`, { rootDirectory });
+	if (status !== 0) {
+		p.log.warn(`Failed to set root directory: ${stderr.trim() || "unknown error"}`);
+	}
+}
+
+async function addVercelPreviewDomain(targetDir, projectId, projectName) {
+	const domain = `${projectName}.${PREVIEW_DOMAIN_SUFFIX}`;
+	p.log.step(`Adding preview domain ${domain} (targets staging)...`);
+	const { status, stderr } = await vercelApi(targetDir, "POST", `/v10/projects/${projectId}/domains`, [
+		"-F", `name=${domain}`,
+		"-F", "gitBranch=staging",
+	]);
+	if (status !== 0) {
+		p.log.warn(`Preview domain add failed: ${stderr.trim() || "unknown error"}`);
+	} else {
+		p.log.success(`Preview domain added: https://${domain}`);
+	}
+}
+
+async function pushEnvToVercel(targetDir, projectId, projectName) {
+	const localPath = resolve(targetDir, ".env.local");
+	if (!existsSync(localPath)) return;
+
+	const entries = parseEnvFile(readFileSync(localPath, "utf-8")).filter(
+		([, value]) => value !== "",
+	);
+	if (entries.length === 0) return;
+
+	const stagingUrl = `https://${projectName}.${PREVIEW_DOMAIN_SUFFIX}`;
+	p.log.step(`Pushing ${entries.length} env vars to Vercel...`);
+
+	const jobs = [];
+	for (const [key, value] of entries) {
+		if (key === "NEXT_PUBLIC_BASE_URL") {
+			jobs.push(upsertVercelEnv(targetDir, projectId, key, LOCAL_BASE_URL, ["development"]));
+			jobs.push(upsertVercelEnv(targetDir, projectId, key, stagingUrl, ["preview"]));
+			jobs.push(upsertVercelEnv(targetDir, projectId, key, stagingUrl, ["production"]));
+		} else {
+			jobs.push(upsertVercelEnv(targetDir, projectId, key, value, ["development", "preview", "production"]));
+		}
+	}
+	await Promise.all(jobs);
+
+	p.log.success(`Env vars pushed. NEXT_PUBLIC_BASE_URL split per env — update production when domain is known.`);
+}
+
+async function upsertVercelEnv(targetDir, projectId, key, value, target) {
+	const { status, stderr } = await vercelApi(
+		targetDir,
+		"POST",
+		`/v10/projects/${projectId}/env?upsert=true`,
+		{ key, value, target, type: "encrypted" },
+	);
+	if (status !== 0) {
+		p.log.warn(`Failed to push ${key}: ${stderr.trim() || "unknown error"}`);
+	}
+}
+
+function spawnAsync(cmd, args, { cwd, input, env, timeout = 30_000 } = {}) {
+	return new Promise((resolve) => {
+		const child = spawn(cmd, args, { cwd, env, timeout });
+		let stdout = "";
+		let stderr = "";
+		let settled = false;
+		const done = (result) => {
+			if (settled) return;
+			settled = true;
+			resolve(result);
+		};
+		child.stdout.on("data", (d) => (stdout += d.toString()));
+		child.stderr.on("data", (d) => (stderr += d.toString()));
+		child.on("close", (status) => done({ status, stdout, stderr }));
+		child.on("error", (err) => done({ status: -1, stdout, stderr: err.message }));
+		if (input !== undefined) {
+			child.stdin.on("error", () => {});
+			child.stdin.end(input);
+		} else {
+			child.stdin.end();
+		}
+	});
+}
+
+function parseEnvFile(content) {
+	const entries = [];
+	for (const line of content.split("\n")) {
+		const trimmed = line.trim();
+		if (!trimmed || trimmed.startsWith("#")) continue;
+		const eq = trimmed.indexOf("=");
+		if (eq === -1) continue;
+		entries.push([trimmed.slice(0, eq).trim(), trimmed.slice(eq + 1).trim()]);
+	}
+	return entries;
+}
+
 function createEnvLocal(targetDir, projectName, projectId, apiToken) {
 	const samplePath = resolve(targetDir, ".env.sample");
 	const localPath = resolve(targetDir, ".env.local");
-	if (!existsSync(samplePath)) return false;
 
-	copyFileSync(samplePath, localPath);
+	if (!existsSync(localPath)) {
+		if (!existsSync(samplePath)) return false;
+		copyFileSync(samplePath, localPath);
+	}
 
 	const vars = {
-		NEXT_PUBLIC_BASE_URL: "https://web.localhost",
 		NEXT_PUBLIC_SANITY_DATASET: "production",
 		NEXT_PUBLIC_SANITY_PROJECT_ID: projectId,
 		SANITY_STUDIO_PROJECT_ID: projectId,
 		SANITY_STUDIO_HOST: projectName,
 		SANITY_WEBHOOK_SECRET: randomBytes(32).toString("hex"),
 	};
+	if (!envVarHas(localPath, "NEXT_PUBLIC_BASE_URL")) {
+		vars.NEXT_PUBLIC_BASE_URL = "https://web.localhost";
+	}
 	if (apiToken) vars.SANITY_API_TOKEN = apiToken;
 
 	updateEnvFile(localPath, vars);
 	return true;
+}
+
+function envVarHas(filePath, key) {
+	if (!existsSync(filePath)) return false;
+	const content = readFileSync(filePath, "utf-8");
+	const match = content.match(new RegExp(`^${key}=(.*)$`, "m"));
+	return match && match[1].trim() !== "";
 }
 
 function updateEnvFile(filePath, vars) {
