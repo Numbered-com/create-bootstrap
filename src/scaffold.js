@@ -5,9 +5,9 @@ import { resolve } from "node:path";
 import * as p from "@clack/prompts";
 
 /**
- * @param {{ projectName: string, template: { repo: string, branch: string, label: string }, grid: object, installDeps: boolean, ecommerceSupport: boolean, createSanityProject: boolean }} options
+ * @param {{ projectName: string, projectTitle: string, template: { repo: string, branch: string, label: string }, grid: object, installDeps: boolean, ecommerceSupport: boolean, createSanityProject: boolean }} options
  */
-export async function scaffold({ projectName, template, grid, installDeps, ecommerceSupport, createSanityProject }) {
+export async function scaffold({ projectName, projectTitle, template, grid, installDeps, ecommerceSupport, createSanityProject }) {
 	const targetDir = resolve(process.cwd(), projectName);
 
 	if (existsSync(targetDir)) {
@@ -30,7 +30,6 @@ export async function scaffold({ projectName, template, grid, installDeps, ecomm
 			{ stdio: "pipe" },
 		);
 	} catch {
-		// Clean up partial clone before HTTPS fallback
 		if (existsSync(targetDir)) {
 			rmSync(targetDir, { recursive: true, force: true });
 		}
@@ -52,29 +51,20 @@ export async function scaffold({ projectName, template, grid, installDeps, ecomm
 
 	s.stop("Template cloned.");
 
-	// Remove .git history and reinitialize
 	rmSync(resolve(targetDir, ".git"), { recursive: true, force: true });
 	execSync("git init", { cwd: targetDir, stdio: "pipe" });
 	p.log.success("Git initialized (clean history).");
 
-	// Update project name in package.json files
 	s.start("Configuring project...");
 	updatePackageName(targetDir, projectName);
-
-	// Write grid configuration
+	updateSanityTitle(targetDir, projectTitle);
 	writeGridConfig(targetDir, grid);
-
-	// Remove .env files (secrets)
 	removeSecrets(targetDir);
-
-	// Remove Shopify ecommerce if not needed
 	if (!ecommerceSupport) {
 		removeShopifyEcommerce(targetDir);
 	}
-
 	s.stop("Project configured.");
 
-	// Install dependencies
 	if (installDeps) {
 		s.start("Installing dependencies with bun...");
 		try {
@@ -90,11 +80,9 @@ export async function scaffold({ projectName, template, grid, installDeps, ecomm
 		}
 	}
 
-	// Create Sanity project
 	if (createSanityProject) {
 		p.log.step("Authenticating with Sanity...");
 
-		// Ensure user is logged in (interactive)
 		const loginResult = spawnSync(
 			"bunx",
 			["sanity@latest", "login"],
@@ -110,7 +98,7 @@ export async function scaffold({ projectName, template, grid, installDeps, ecomm
 
 		const result = spawnSync(
 			"bunx",
-			["sanity@latest", "projects", "create", projectName, "--dataset=production", "--json", "-y"],
+			["sanity@latest", "projects", "create", projectTitle, "--dataset=production", "--json", "-y"],
 			{ cwd: targetDir, stdio: ["inherit", "pipe", "inherit"], timeout: 120_000 },
 		);
 
@@ -122,12 +110,10 @@ export async function scaffold({ projectName, template, grid, installDeps, ecomm
 		const rawOutput = result.stdout.toString().trim();
 		let projectId;
 		try {
-			// Try to extract JSON from output (may contain extra text)
 			const jsonMatch = rawOutput.match(/\{[\s\S]*\}/);
 			const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : rawOutput);
 			projectId = parsed.projectId || parsed.id;
 		} catch {
-			// Fallback: try to extract project ID with regex
 			const idMatch = rawOutput.match(/[a-z0-9]{8,}/i);
 			projectId = idMatch?.[0];
 		}
@@ -140,17 +126,22 @@ export async function scaffold({ projectName, template, grid, installDeps, ecomm
 
 		p.log.success(`Sanity project created: ${projectId}`);
 
-		// Copy .env.sample to .env.local and populate
-		const envLocalCreated = createEnvLocal(targetDir, projectName, projectId);
-		if (envLocalCreated) {
+		p.log.info(
+			`Create a SANITY_API_TOKEN (Editor role) at:\nhttps://www.sanity.io/manage/project/${projectId}/api#tokens`,
+		);
+		const token = await p.password({
+			message: "Paste SANITY_API_TOKEN (or leave empty to skip):",
+		});
+		if (p.isCancel(token)) {
+			p.cancel("Cancelled.");
+			process.exit(0);
+		}
+
+		if (createEnvLocal(targetDir, projectName, projectId, token || undefined)) {
 			p.log.success(`Created .env.local with project config`);
-			p.log.info(
-				`Create SANITY_API_TOKEN at: https://www.sanity.io/manage/project/${projectId}/api#tokens`,
-			);
 		}
 	}
 
-	// Summary
 	p.log.info(`\nProject created at ${targetDir}`);
 	p.note(
 		[
@@ -172,6 +163,24 @@ function updatePackageName(targetDir, projectName) {
 		pkg.name = projectName;
 		writeFileSync(rootPkg, JSON.stringify(pkg, null, "\t") + "\n");
 	}
+}
+
+function updateSanityTitle(targetDir, title) {
+	editFile(resolve(targetDir, "apps/sanity/sanity.config.tsx"), [
+		[
+			/(name:\s*['"]production['"],\s*title:\s*)['"][^'"]*['"]/,
+			`$1'${title.replace(/'/g, "\\'")}'`,
+		],
+	]);
+}
+
+function editFile(filePath, replacements) {
+	if (!existsSync(filePath)) return;
+	let content = readFileSync(filePath, "utf-8");
+	for (const [pattern, replacement] of replacements) {
+		content = content.replace(pattern, replacement);
+	}
+	writeFileSync(filePath, content);
 }
 
 function writeGridConfig(targetDir, grid) {
@@ -208,7 +217,6 @@ function removeSecrets(targetDir) {
 }
 
 function removeShopifyEcommerce(targetDir) {
-	// Directories to remove entirely
 	const dirsToDelete = [
 		"packages/shopify",
 		"packages/services/shopify",
@@ -216,7 +224,6 @@ function removeShopifyEcommerce(targetDir) {
 		"apps/web/src/app/api/shopify",
 	];
 
-	// Individual files to delete
 	const filesToDelete = [
 		"packages/config/shopify.mjs",
 		"packages/types/shopify-codegen.ts",
@@ -233,14 +240,8 @@ function removeShopifyEcommerce(targetDir) {
 		"apps/sanity/schemas/objects/module/collection.tsx",
 	];
 
-	// Package patterns to strip from package.json
-	const shopifyPackages = [
-		"@shopify/",
-		"shopify-",
-		"@local/shopify",
-	];
+	const shopifyPackages = ["@shopify/", "shopify-", "@local/shopify"];
 
-	// Remove directories
 	for (const dir of dirsToDelete) {
 		const dirPath = resolve(targetDir, dir);
 		if (existsSync(dirPath)) {
@@ -248,7 +249,6 @@ function removeShopifyEcommerce(targetDir) {
 		}
 	}
 
-	// Remove individual files
 	for (const file of filesToDelete) {
 		const filePath = resolve(targetDir, file);
 		if (existsSync(filePath)) {
@@ -256,16 +256,27 @@ function removeShopifyEcommerce(targetDir) {
 		}
 	}
 
-	// Remove Shopify packages from all package.json files
-	const packageJsonPaths = findPackageJsonFiles(targetDir);
-	for (const pkgPath of packageJsonPaths) {
+	for (const pkgPath of findPackageJsonFiles(targetDir)) {
 		removeShopifyFromPackageJson(pkgPath, shopifyPackages);
 	}
 
-	// Clean up files that need modification
-	cleanupSanityConstants(targetDir);
-	cleanupSanitySchemaIndex(targetDir);
-	cleanupSanityDocumentActions(targetDir);
+	editFile(resolve(targetDir, "apps/sanity/constants.js"), [
+		[/export\s+const\s+SHOPIFY_DOCUMENT_TYPES\s*=\s*\[[^\]]*\];?\s*/g, ""],
+		[/export\s+const\s+SHOPIFY_STORE_ID\s*=\s*['"][^'"]*['"];?\s*/g, ""],
+	]);
+	editFile(resolve(targetDir, "apps/sanity/schemas/index.ts"), [
+		[/^.*import.*shopifyObjects.*$\n?/gm, ""],
+		[/,?\s*\.\.\.shopifyObjects/g, ""],
+		[/\.\.\.shopifyObjects,?\s*/g, ""],
+	]);
+	editFile(resolve(targetDir, "apps/sanity/plugins/customDocumentActions/index.ts"), [
+		[/^.*import.*SHOPIFY_DOCUMENT_TYPES.*$\n?/gm, ""],
+		[/^.*import.*shopifyLink.*$\n?/gm, ""],
+		[/^.*import.*shopifyDelete.*$\n?/gm, ""],
+		[/^.*SHOPIFY_DOCUMENT_TYPES.*$\n?/gm, ""],
+		[/^.*shopifyLink.*$\n?/gm, ""],
+		[/^.*shopifyDelete.*$\n?/gm, ""],
+	]);
 }
 
 function findPackageJsonFiles(dir, files = []) {
@@ -301,7 +312,7 @@ function removeShopifyFromPackageJson(pkgPath, patterns) {
 	}
 }
 
-function createEnvLocal(targetDir, projectName, projectId) {
+function createEnvLocal(targetDir, projectName, projectId, apiToken) {
 	const samplePath = resolve(targetDir, ".env.sample");
 	const localPath = resolve(targetDir, ".env.local");
 	if (!existsSync(samplePath)) return false;
@@ -316,8 +327,16 @@ function createEnvLocal(targetDir, projectName, projectId) {
 		SANITY_STUDIO_HOST: projectName,
 		SANITY_WEBHOOK_SECRET: randomBytes(32).toString("hex"),
 	};
+	if (apiToken) vars.SANITY_API_TOKEN = apiToken;
 
-	let content = readFileSync(localPath, "utf-8");
+	updateEnvFile(localPath, vars);
+	return true;
+}
+
+function updateEnvFile(filePath, vars) {
+	if (!existsSync(filePath)) return;
+
+	let content = readFileSync(filePath, "utf-8");
 	for (const [key, value] of Object.entries(vars)) {
 		const regex = new RegExp(`^${key}=.*$`, "m");
 		if (regex.test(content)) {
@@ -326,48 +345,6 @@ function createEnvLocal(targetDir, projectName, projectId) {
 			content += `\n${key}=${value}`;
 		}
 	}
-	writeFileSync(localPath, content);
-	return true;
-}
-
-function cleanupSanityConstants(targetDir) {
-	const filePath = resolve(targetDir, "apps/sanity/constants.js");
-	if (!existsSync(filePath)) return;
-
-	let content = readFileSync(filePath, "utf-8");
-	// Remove SHOPIFY_DOCUMENT_TYPES export
-	content = content.replace(/export\s+const\s+SHOPIFY_DOCUMENT_TYPES\s*=\s*\[[^\]]*\];?\s*/g, "");
-	// Remove SHOPIFY_STORE_ID export
-	content = content.replace(/export\s+const\s+SHOPIFY_STORE_ID\s*=\s*['"][^'"]*['"];?\s*/g, "");
 	writeFileSync(filePath, content);
 }
 
-function cleanupSanitySchemaIndex(targetDir) {
-	const filePath = resolve(targetDir, "apps/sanity/schemas/index.ts");
-	if (!existsSync(filePath)) return;
-
-	let content = readFileSync(filePath, "utf-8");
-	// Remove shopifyObjects import (commented or not)
-	content = content.replace(/^.*import.*shopifyObjects.*$\n?/gm, "");
-	// Remove shopifyObjects from exports
-	content = content.replace(/,?\s*\.\.\.shopifyObjects/g, "");
-	content = content.replace(/\.\.\.shopifyObjects,?\s*/g, "");
-	writeFileSync(filePath, content);
-}
-
-function cleanupSanityDocumentActions(targetDir) {
-	const filePath = resolve(targetDir, "apps/sanity/plugins/customDocumentActions/index.ts");
-	if (!existsSync(filePath)) return;
-
-	let content = readFileSync(filePath, "utf-8");
-	// Remove SHOPIFY_DOCUMENT_TYPES import
-	content = content.replace(/^.*import.*SHOPIFY_DOCUMENT_TYPES.*$\n?/gm, "");
-	// Remove shopify action imports
-	content = content.replace(/^.*import.*shopifyLink.*$\n?/gm, "");
-	content = content.replace(/^.*import.*shopifyDelete.*$\n?/gm, "");
-	// Remove shopify-related action registrations (lines referencing shopify actions)
-	content = content.replace(/^.*SHOPIFY_DOCUMENT_TYPES.*$\n?/gm, "");
-	content = content.replace(/^.*shopifyLink.*$\n?/gm, "");
-	content = content.replace(/^.*shopifyDelete.*$\n?/gm, "");
-	writeFileSync(filePath, content);
-}

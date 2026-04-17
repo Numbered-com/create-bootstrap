@@ -45,6 +45,15 @@ const TEMPLATES = {
 	},
 }
 
+function slugify(str) {
+	return str
+		.toLowerCase()
+		.normalize('NFKD')
+		.replace(/[\u0300-\u036f]/g, '')
+		.replace(/[^a-z0-9]+/g, '-')
+		.replace(/^-+|-+$/g, '')
+}
+
 const DEFAULT_GRID = {
 	mobile: { columns: 6, gutter: 12, margin: 12, mockupWidth: 375, fontScalingMaxWidth: 475 },
 	tablet: { columns: 6, gutter: 12, margin: 12, mockupWidth: 768, screenWidth: 768, screen: 'md' },
@@ -62,10 +71,10 @@ export async function main() {
 			projectName: () =>
 				p.text({
 					message: 'Project name?',
-					placeholder: 'my-project',
+					placeholder: 'My Project',
 					validate: (value) => {
 						if (!value?.trim()) return 'Project name is required'
-						if (!/^[a-z0-9-]+$/.test(value)) return 'Use lowercase letters, numbers, and hyphens only'
+						if (!slugify(value)) return 'Project name must contain alphanumeric characters'
 					},
 				}),
 
@@ -84,7 +93,6 @@ export async function main() {
 		{ onCancel: () => (p.cancel('Cancelled.'), process.exit(0)) },
 	)
 
-	// Ecommerce support prompt (only for nextjs template)
 	let ecommerceSupport = false
 	if (answers.template === 'nextjs') {
 		ecommerceSupport = await p.confirm({
@@ -97,7 +105,6 @@ export async function main() {
 		}
 	}
 
-	// Grid configuration
 	let grid = DEFAULT_GRID
 	if (answers.configureGrid) {
 		const gridAnswers = await p.group(
@@ -199,7 +206,6 @@ export async function main() {
 		process.exit(0)
 	}
 
-	// Sanity project creation (only for nextjs template)
 	let createSanityProject = false
 	if (answers.template === 'nextjs') {
 		createSanityProject = await p.confirm({
@@ -213,9 +219,12 @@ export async function main() {
 	}
 
 	const templateConfig = TEMPLATES[answers.template]
+	const projectTitle = answers.projectName.trim()
+	const projectSlug = slugify(projectTitle)
 
 	await scaffold({
-		projectName: answers.projectName,
+		projectName: projectSlug,
+		projectTitle,
 		template: templateConfig,
 		grid,
 		installDeps,
@@ -223,5 +232,5 @@ export async function main() {
 		createSanityProject,
 	})
 
-	p.outro(pc.green(`Done! cd ${answers.projectName} and start building.`))
+	p.outro(pc.green(`Done! cd ${projectSlug} and start building.`))
 }
