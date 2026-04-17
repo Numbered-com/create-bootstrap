@@ -19,7 +19,6 @@ jobs:
           node-version: "lts/*"
           registry-url: "https://registry.npmjs.org"
           scope: "@numbered"
-          always-auth: true
 
       - name: Verify NPM_TOKEN is set
         run: |
