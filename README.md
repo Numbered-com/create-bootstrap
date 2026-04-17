@@ -2,29 +2,13 @@
 
 CLI to scaffold a new Numbered Studio project — Next.js + Sanity or Shopify Liquid, with Figma grid config baked in. Creates the project locally and wires it up end-to-end: Sanity project, GitHub repo, Vercel deployment, env vars, and preview domain.
 
-## Install
-
-The repo is private, so `bunx github:...` can't fetch the tarball. Install globally via SSH once:
-
-```bash
-bun add -g git+ssh://git@github.com:Numbered-com/create-bootstrap.git
-```
-
-This exposes the `create-bootstrap` binary globally.
-
 ## Usage
 
 ```bash
-create-bootstrap
+npx github:Numbered-com/create-bootstrap
 ```
 
 Re-run it on an existing directory to resume setup — the CLI detects the project type and skips steps that are already done (Sanity project, GitHub repo, etc.).
-
-To update:
-
-```bash
-bun add -g git+ssh://git@github.com:Numbered-com/create-bootstrap.git
-```
 
 ## What it does
 
