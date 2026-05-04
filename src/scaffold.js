@@ -21,34 +21,55 @@ export async function scaffold({ projectName, projectTitle, template, grid, inst
 	if (!isExisting) {
 		s.start(`Cloning ${template.label} template...`);
 
-		const httpsRepo = template.repo.replace(
-			/^git@github\.com:/,
-			"https://github.com/",
-		);
+		const sshRepo = template.repo;
+		const httpsRepo = sshRepo.replace(/^git@github\.com:/, "https://github.com/");
+		const ghRepo = sshRepo.match(/github\.com[:/]([^/]+\/[^/.]+)/)?.[1];
 
-		try {
-			execSync(
-				`git clone --depth 1 --branch ${template.branch} ${template.repo} ${projectName}`,
-				{ stdio: "pipe" },
-			);
-		} catch {
-			if (existsSync(targetDir)) {
+		const attempts = [
+			{
+				label: "SSH",
+				cmd: `git clone --depth 1 --branch ${template.branch} ${sshRepo} ${projectName}`,
+				env: { ...process.env, GIT_SSH_COMMAND: "ssh -o BatchMode=yes" },
+			},
+			ghRepo && {
+				label: "gh CLI",
+				cmd: `gh repo clone ${ghRepo} ${projectName} -- --depth 1 --branch ${template.branch}`,
+				env: process.env,
+				canRun: isGhAuthed,
+			},
+			{
+				label: "HTTPS",
+				cmd: `git clone --depth 1 --branch ${template.branch} ${httpsRepo} ${projectName}`,
+				env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+			},
+		].filter(Boolean);
+
+		let lastErr;
+		let cloned = false;
+		let prev;
+		for (const attempt of attempts) {
+			if (attempt.canRun && !attempt.canRun()) continue;
+			if (prev) {
+				s.message(`${prev.label} clone failed, trying ${attempt.label}...`);
 				rmSync(targetDir, { recursive: true, force: true });
 			}
-			s.message("SSH clone failed, trying HTTPS...");
 			try {
-				execSync(
-					`git clone --depth 1 --branch ${template.branch} ${httpsRepo} ${projectName}`,
-					{ stdio: "pipe" },
-				);
+				execSync(attempt.cmd, { stdio: "pipe", env: attempt.env });
+				cloned = true;
+				break;
 			} catch (err) {
-				s.stop("Clone failed.");
-				p.log.error(
-					`Failed to clone template repo.\n${err.stderr?.toString() || err.message}`,
-				);
-				p.log.info(`Make sure you have access to the ${GITHUB_ORG} GitHub org.`);
-				process.exit(1);
+				lastErr = err;
+				prev = attempt;
 			}
+		}
+
+		if (!cloned) {
+			s.stop("Clone failed.");
+			p.log.error(
+				`Failed to clone template repo.\n${lastErr?.stderr?.toString() || lastErr?.message || "unknown error"}`,
+			);
+			p.log.info(`Make sure you have access to the ${GITHUB_ORG} GitHub org — run \`gh auth login\` or set up a GitHub SSH key.`);
+			process.exit(1);
 		}
 
 		s.stop("Template cloned.");
@@ -334,10 +355,17 @@ function removeShopifyFromPackageJson(pkgPath, patterns) {
 	}
 }
 
-function createGithubRepository(targetDir, projectName) {
+function isGhAuthed() {
 	try {
 		execSync("gh auth status", { stdio: "pipe" });
+		return true;
 	} catch {
+		return false;
+	}
+}
+
+function createGithubRepository(targetDir, projectName) {
+	if (!isGhAuthed()) {
 		p.log.error("gh CLI not installed or not authenticated. Run 'gh auth login' and retry.");
 		process.exit(1);
 	}
