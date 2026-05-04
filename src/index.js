@@ -43,7 +43,7 @@ const TEMPLATES = {
 	shopify: {
 		label: 'Shopify Liquid',
 		repo: 'git@github.com:Numbered-com/jolie.git',
-		branch: 'main',
+		branch: 'staging',
 	},
 }
 

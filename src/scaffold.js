@@ -32,9 +32,9 @@ export async function scaffold({ projectName, projectTitle, template, grid, inst
 				env: { ...process.env, GIT_SSH_COMMAND: "ssh -o BatchMode=yes" },
 			},
 			ghRepo && {
-				label: "gh CLI",
-				cmd: `gh repo clone ${ghRepo} ${projectName} -- --depth 1 --branch ${template.branch}`,
-				env: process.env,
+				label: "gh credentials",
+				cmd: `git -c credential.helper= -c credential.helper="!gh auth git-credential" clone --depth 1 --branch ${template.branch} ${httpsRepo} ${projectName}`,
+				env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
 				canRun: isGhAuthed,
 			},
 			{
