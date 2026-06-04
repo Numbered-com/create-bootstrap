@@ -42,7 +42,7 @@ const TEMPLATES = {
 	// Add more templates here:
 	shopify: {
 		label: 'Shopify Liquid',
-		repo: 'git@github.com:Numbered-com/jolie.git',
+		repo: 'git@github.com:Numbered-com/bootstrap-shopify-theme.git',
 		branch: 'staging',
 	},
 }
