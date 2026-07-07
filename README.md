@@ -21,7 +21,7 @@ Prompts:
 3. **Shopify ecommerce support** — for `nextjs` only; removes ~100 ecommerce files when disabled (default: no)
 4. **Grid configuration** — defaults to 24col desktop / 6col mobile
 5. **Install dependencies** — via bun
-6. **Create Sanity project** — creates remote project, injects all IDs/secrets into `.env.local`, prompts for `SANITY_API_TOKEN`
+6. **Create Sanity project** — creates remote project, injects all IDs/secrets into `.env.local`, prompts for `SANITY_API_READ_TOKEN` (Viewer role)
 7. **Create GitHub repo** — private repo under `Numbered-com`, initial commit on `main`, auto-push, then checkout `staging` branch
 8. **Link Vercel project** — under `numbered-sandbox` scope, sets `apps/web` as root, pushes env vars to all environments (parallel), adds `{slug}.numbered.studio` preview domain targeting `staging`
 
