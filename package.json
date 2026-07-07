@@ -1,6 +1,6 @@
 {
 	"name": "@numbered/create-bootstrap",
-	"version": "1.1.0",
+	"version": "1.1.1",
 	"description": "Scaffold a new Numbered Studio project (Next.js + Sanity or Shopify Liquid) with full Sanity/GitHub/Vercel setup.",
 	"type": "module",
 	"bin": {
