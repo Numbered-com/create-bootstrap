@@ -1,18 +1,25 @@
-name: Publish to npm
+name: Bump & publish to npm
 
 on:
   push:
-    tags:
-      - "v*"
+    branches:
+      - main
+
+# Only one release at a time; never cancel a release mid-publish.
+concurrency:
+  group: publish-main
+  cancel-in-progress: false
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write # to push the version bump commit + tag
       id-token: write # for npm provenance
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v6
         with:
@@ -30,6 +37,29 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - run: npm publish --access public
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Bump version (patch)
+        id: bump
+        run: |
+          # Bump package.json only — no commit/tag yet, and skip the
+          # postversion hook so nothing is pushed before we publish.
+          VERSION=$(npm version patch --no-git-tag-version --ignore-scripts)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Bumped to $VERSION"
+
+      - name: Publish to npm
+        run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Commit, tag & push
+        run: |
+          VERSION="${{ steps.bump.outputs.version }}"
+          git commit -am "chore(release): $VERSION [skip ci]"
+          git tag -a "$VERSION" -m "$VERSION"
+          git push origin "HEAD:main"
+          git push origin "$VERSION"
