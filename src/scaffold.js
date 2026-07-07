@@ -151,10 +151,10 @@ export async function scaffold({ projectName, projectTitle, template, grid, inst
 		p.log.success(`Sanity project created: ${projectId}`);
 
 		p.log.info(
-			`Create a SANITY_API_TOKEN (Editor role) at:\nhttps://www.sanity.io/manage/project/${projectId}/api#tokens`,
+			`Create a SANITY_API_READ_TOKEN (Viewer role — it is sent to editors' browsers during draft mode, never use a write-capable token) at:\nhttps://www.sanity.io/manage/project/${projectId}/api#tokens`,
 		);
 		const token = await p.password({
-			message: "Paste SANITY_API_TOKEN (or leave empty to skip):",
+			message: "Paste SANITY_API_READ_TOKEN (or leave empty to skip):",
 		});
 		if (p.isCancel(token)) {
 			p.cancel("Cancelled.");
@@ -580,11 +580,13 @@ function createEnvLocal(targetDir, projectName, projectId, apiToken) {
 		SANITY_STUDIO_PROJECT_ID: projectId,
 		SANITY_STUDIO_HOST: projectName,
 		SANITY_WEBHOOK_SECRET: randomBytes(32).toString("hex"),
+		// The draft-mode endpoint fails closed without it — preview is dead until it's set.
+		SANITY_STUDIO_DRAFT_SECRET: randomBytes(32).toString("hex"),
 	};
 	if (!envVarHas(localPath, "NEXT_PUBLIC_BASE_URL")) {
 		vars.NEXT_PUBLIC_BASE_URL = "https://web.localhost";
 	}
-	if (apiToken) vars.SANITY_API_TOKEN = apiToken;
+	if (apiToken) vars.SANITY_API_READ_TOKEN = apiToken;
 
 	updateEnvFile(localPath, vars);
 	return true;
