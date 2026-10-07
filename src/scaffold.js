@@ -1,4 +1,4 @@
-import { execSync, spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { copyFileSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -25,21 +25,22 @@ export async function scaffold({ projectName, projectTitle, template, grid, inst
 		const httpsRepo = sshRepo.replace(/^git@github\.com:/, "https://github.com/");
 		const ghRepo = sshRepo.match(/github\.com[:/]([^/]+\/[^/.]+)/)?.[1];
 
+		const cloneArgs = (url) => ["clone", "--depth", "1", "--branch", template.branch, url, projectName];
 		const attempts = [
 			{
 				label: "SSH",
-				cmd: `git clone --depth 1 --branch ${template.branch} ${sshRepo} ${projectName}`,
+				args: cloneArgs(sshRepo),
 				env: { ...process.env, GIT_SSH_COMMAND: "ssh -o BatchMode=yes" },
 			},
 			ghRepo && {
 				label: "gh credentials",
-				cmd: `git -c credential.helper= -c credential.helper="!gh auth git-credential" clone --depth 1 --branch ${template.branch} ${httpsRepo} ${projectName}`,
+				args: ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential", ...cloneArgs(httpsRepo)],
 				env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
 				canRun: isGhAuthed,
 			},
 			{
 				label: "HTTPS",
-				cmd: `git clone --depth 1 --branch ${template.branch} ${httpsRepo} ${projectName}`,
+				args: cloneArgs(httpsRepo),
 				env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
 			},
 		].filter(Boolean);
@@ -48,56 +49,55 @@ export async function scaffold({ projectName, projectTitle, template, grid, inst
 		let cloned = false;
 		let prev;
 		for (const attempt of attempts) {
-			if (attempt.canRun && !attempt.canRun()) continue;
+			if (attempt.canRun && !(await attempt.canRun())) continue;
 			if (prev) {
 				s.message(`${prev.label} clone failed, trying ${attempt.label}...`);
 				rmSync(targetDir, { recursive: true, force: true });
 			}
-			try {
-				execSync(attempt.cmd, { stdio: "pipe", env: attempt.env });
+			const result = await spawnAsync("git", attempt.args, { env: attempt.env, timeout: 300_000 });
+			if (result.status === 0) {
 				cloned = true;
 				break;
-			} catch (err) {
-				lastErr = err;
-				prev = attempt;
 			}
+			lastErr = result.stderr;
+			prev = attempt;
 		}
 
 		if (!cloned) {
-			s.stop("Clone failed.");
-			p.log.error(
-				`Failed to clone template repo.\n${lastErr?.stderr?.toString() || lastErr?.message || "unknown error"}`,
-			);
+			s.error("Clone failed.");
+			p.log.error(`Failed to clone template repo.\n${lastErr || "unknown error"}`);
 			p.log.info(`Make sure you have access to the ${GITHUB_ORG} GitHub org — run \`gh auth login\` or set up a GitHub SSH key.`);
 			process.exit(1);
 		}
 
-		s.stop("Template cloned.");
-
+		s.message("Initializing git (clean history)...");
 		rmSync(resolve(targetDir, ".git"), { recursive: true, force: true });
-		execSync("git init", { cwd: targetDir, stdio: "pipe" });
-		p.log.success("Git initialized (clean history).");
+		await run("git", ["init"], { cwd: targetDir });
+		s.stop("Template cloned, git initialized (clean history).");
 
 		s.start("Configuring project...");
-		updatePackageName(targetDir, projectName);
-		updateSanityTitle(targetDir, projectTitle);
-		writeGridConfig(targetDir, grid);
-		removeSecrets(targetDir);
-		if (!ecommerceSupport) {
-			removeShopifyEcommerce(targetDir);
+		const configSteps = [
+			["Updating package name...", () => updatePackageName(targetDir, projectName)],
+			["Setting Sanity studio title...", () => updateSanityTitle(targetDir, projectTitle)],
+			["Writing grid config...", () => writeGridConfig(targetDir, grid)],
+			["Removing secrets...", () => removeSecrets(targetDir)],
+			!ecommerceSupport && ["Removing Shopify e-commerce files...", () => removeShopifyEcommerce(targetDir)],
+		].filter(Boolean);
+		for (const [message, run] of configSteps) {
+			s.message(message);
+			// Yield so the spinner can render between synchronous fs steps.
+			await new Promise((r) => setImmediate(r));
+			run();
 		}
 		s.stop("Project configured.");
 
 		if (installDeps) {
 			s.start("Installing dependencies with bun...");
-			try {
-				execSync("bun install", {
-					cwd: targetDir,
-					stdio: "pipe",
-					timeout: 120_000,
-				});
+			// Async spawn keeps the event loop free so the spinner animates during install.
+			const install = await spawnAsync("bun", ["install"], { cwd: targetDir, timeout: 120_000 });
+			if (install.status === 0) {
 				s.stop("Dependencies installed.");
-			} catch {
+			} else {
 				s.stop("Install failed.");
 				p.log.warn("bun install failed. Run it manually after setup.");
 			}
@@ -167,20 +167,27 @@ export async function scaffold({ projectName, projectTitle, template, grid, inst
 	}
 
 	if (createGithubRepo) {
-		createGithubRepository(targetDir, projectName);
+		await createGithubRepository(targetDir, projectName);
 	}
 
 	if (createVercelProject) {
-		linkVercelProject(targetDir, projectName);
+		await linkVercelProject(targetDir, projectName);
 		const projectId = readVercelProjectId(targetDir);
 		if (!projectId) {
 			p.log.warn("Could not read Vercel projectId — skipping env/domain setup.");
 		} else {
-			await Promise.all([
-				setVercelRootDirectory(targetDir, projectId, "apps/web"),
-				pushEnvToVercel(targetDir, projectId, projectName),
-				addVercelPreviewDomain(targetDir, projectId, projectName),
-			]);
+			s.start("Configuring Vercel project (root directory, env vars, preview domain)...");
+			const logs = (
+				await Promise.all([
+					setVercelRootDirectory(targetDir, projectId, "apps/web"),
+					pushEnvToVercel(targetDir, projectId, projectName),
+					addVercelPreviewDomain(targetDir, projectId, projectName),
+				])
+			).flat();
+			const failed = logs.some(([level]) => level === "warn");
+			if (failed) s.error("Vercel project configured with warnings.");
+			else s.stop("Vercel project configured.");
+			for (const [level, message] of logs) p.log[level](message);
 		}
 	}
 
@@ -355,94 +362,95 @@ function removeShopifyFromPackageJson(pkgPath, patterns) {
 	}
 }
 
-function isGhAuthed() {
-	try {
-		execSync("gh auth status", { stdio: "pipe" });
-		return true;
-	} catch {
-		return false;
-	}
+async function isGhAuthed() {
+	const { status } = await spawnAsync("gh", ["auth", "status"]);
+	return status === 0;
 }
 
-function createGithubRepository(targetDir, projectName) {
-	if (!isGhAuthed()) {
+async function createGithubRepository(targetDir, projectName) {
+	const s = p.spinner();
+	const fullRepo = `${GITHUB_ORG}/${projectName}`;
+	s.start("Checking GitHub authentication...");
+
+	if (!(await isGhAuthed())) {
+		s.error("GitHub CLI not ready.");
 		p.log.error("gh CLI not installed or not authenticated. Run 'gh auth login' and retry.");
 		process.exit(1);
 	}
 
+	s.message("Committing on main...");
 	if (!existsSync(resolve(targetDir, ".git"))) {
-		execSync("git init -b main", { cwd: targetDir, stdio: "pipe" });
+		await run("git", ["init", "-b", "main"], { cwd: targetDir });
 	} else {
-		try {
-			execSync("git symbolic-ref HEAD refs/heads/main", { cwd: targetDir, stdio: "pipe" });
-		} catch {}
+		await spawnAsync("git", ["symbolic-ref", "HEAD", "refs/heads/main"], { cwd: targetDir });
 	}
 
 	try {
-		execSync("git add .", { cwd: targetDir, stdio: "pipe" });
-		execSync("git diff --cached --quiet", { cwd: targetDir, stdio: "pipe" });
-	} catch {
-		p.log.step("Committing on main...");
-		try {
-			execSync('git commit -m "first commit"', { cwd: targetDir, stdio: "pipe" });
-		} catch (err) {
-			p.log.error(`Git commit failed: ${err.stderr?.toString() || err.message}`);
-			process.exit(1);
+		await run("git", ["add", "."], { cwd: targetDir });
+		const staged = await spawnAsync("git", ["diff", "--cached", "--quiet"], { cwd: targetDir });
+		if (staged.status !== 0) {
+			await run("git", ["commit", "-m", "first commit"], { cwd: targetDir });
 		}
+	} catch (err) {
+		s.error("Git commit failed.");
+		p.log.error(err.message);
+		process.exit(1);
 	}
 
-	const fullRepo = `${GITHUB_ORG}/${projectName}`;
-	p.log.step(`Creating private repo ${fullRepo}...`);
-	const result = spawnSync(
+	s.message(`Creating private repo ${fullRepo} and pushing main...`);
+	const result = await spawnAsync(
 		"gh",
 		["repo", "create", fullRepo, "--private", "--source=.", "--remote=origin", "--push"],
-		{ cwd: targetDir, stdio: "inherit", timeout: 120_000 },
+		{ cwd: targetDir, timeout: 120_000 },
 	);
 	if (result.status !== 0) {
-		p.log.error("GitHub repo creation failed.");
+		s.error("GitHub repo creation failed.");
+		p.log.error(result.stderr.trim() || "unknown error");
 		process.exit(1);
 	}
-	p.log.success(`Repo pushed to main: https://github.com/${fullRepo}`);
 
-	p.log.step("Creating staging branch...");
+	s.message("Creating staging branch...");
 	try {
-		execSync("git checkout -b staging", { cwd: targetDir, stdio: "pipe" });
-		execSync("git push -u origin staging", { cwd: targetDir, stdio: "pipe" });
-		p.log.success("Checked out on staging.");
+		await run("git", ["checkout", "-b", "staging"], { cwd: targetDir });
+		await run("git", ["push", "-u", "origin", "staging"], { cwd: targetDir, timeout: 120_000 });
+		s.stop(`Repo pushed: https://github.com/${fullRepo} (checked out on staging).`);
 	} catch (err) {
-		p.log.warn(`Could not create staging branch: ${err.stderr?.toString() || err.message}`);
+		s.stop(`Repo pushed to main: https://github.com/${fullRepo}`);
+		p.log.warn(`Could not create staging branch: ${err.message}`);
 	}
 }
 
-function ensureVercelInstalled() {
-	try {
-		const version = execSync("vercel --version", { stdio: "pipe" }).toString().trim();
-		const major = parseInt(version.split(".")[0], 10);
-		if (major >= MIN_VERCEL_VERSION) return;
-	} catch {}
+async function ensureVercelInstalled(s) {
+	const { status, stdout } = await spawnAsync("vercel", ["--version"]);
+	if (status === 0 && parseInt(stdout.trim().split(".")[0], 10) >= MIN_VERCEL_VERSION) return;
 
-	p.log.step("Installing Vercel CLI globally...");
+	s.message("Installing Vercel CLI globally...");
 	try {
-		execSync("bun add -g vercel@latest", { stdio: "pipe", timeout: 180_000 });
+		await run("bun", ["add", "-g", "vercel@latest"], { timeout: 180_000 });
 	} catch (err) {
-		p.log.error(`Failed to install Vercel CLI: ${err.stderr?.toString() || err.message}`);
+		s.error("Vercel CLI install failed.");
+		p.log.error(`Failed to install Vercel CLI: ${err.message}`);
 		process.exit(1);
 	}
 }
 
-function linkVercelProject(targetDir, projectName) {
-	ensureVercelInstalled();
+async function linkVercelProject(targetDir, projectName) {
+	const s = p.spinner();
+	s.start("Checking Vercel CLI...");
+	await ensureVercelInstalled(s);
 
-	p.log.step(`Linking Vercel project ${projectName} (scope: ${VERCEL_SCOPE})...`);
-	const result = spawnSync(
+	s.message(`Linking Vercel project ${projectName} (scope: ${VERCEL_SCOPE})...`);
+	const result = await spawnAsync(
 		"vercel",
 		["link", "--yes", "--project", projectName, "--scope", VERCEL_SCOPE],
-		{ cwd: targetDir, stdio: "inherit", timeout: 300_000, env: VERCEL_ENV },
+		{ cwd: targetDir, timeout: 300_000, env: VERCEL_ENV },
 	);
 	if (result.status !== 0) {
-		p.log.error("Vercel link failed.");
+		s.error("Vercel link failed.");
+		p.log.error(result.stderr.trim() || "unknown error");
 		process.exit(1);
 	}
+	s.stop(`Vercel project linked: ${projectName} (scope: ${VERCEL_SCOPE}).`);
 }
 
 function readVercelProjectId(targetDir) {
@@ -467,41 +475,39 @@ function vercelApi(targetDir, method, path, body) {
 	return spawnAsync("vercel", args, { cwd: targetDir, input, env: VERCEL_ENV });
 }
 
+// The Vercel setup helpers run concurrently under one spinner, so they return
+// [level, message] log entries for the caller to print after the spinner stops.
 async function setVercelRootDirectory(targetDir, projectId, rootDirectory) {
-	p.log.step(`Setting Vercel root directory to ${rootDirectory}...`);
 	// v9 endpoint: rootDirectory not yet supported on v10 PATCH
 	const { status, stderr } = await vercelApi(targetDir, "PATCH", `/v9/projects/${projectId}`, { rootDirectory });
 	if (status !== 0) {
-		p.log.warn(`Failed to set root directory: ${stderr.trim() || "unknown error"}`);
+		return [["warn", `Failed to set root directory: ${stderr.trim() || "unknown error"}`]];
 	}
+	return [["success", `Root directory set to ${rootDirectory}.`]];
 }
 
 async function addVercelPreviewDomain(targetDir, projectId, projectName) {
 	const domain = `${projectName}.${PREVIEW_DOMAIN_SUFFIX}`;
-	p.log.step(`Adding preview domain ${domain} (targets staging)...`);
 	const { status, stderr } = await vercelApi(targetDir, "POST", `/v10/projects/${projectId}/domains`, [
 		"-F", `name=${domain}`,
 		"-F", "gitBranch=staging",
 	]);
 	if (status !== 0) {
-		p.log.warn(`Preview domain add failed: ${stderr.trim() || "unknown error"}`);
-	} else {
-		p.log.success(`Preview domain added: https://${domain}`);
+		return [["warn", `Preview domain add failed: ${stderr.trim() || "unknown error"}`]];
 	}
+	return [["success", `Preview domain added (targets staging): https://${domain}`]];
 }
 
 async function pushEnvToVercel(targetDir, projectId, projectName) {
 	const localPath = resolve(targetDir, ".env.local");
-	if (!existsSync(localPath)) return;
+	if (!existsSync(localPath)) return [];
 
 	const entries = parseEnvFile(readFileSync(localPath, "utf-8")).filter(
 		([, value]) => value !== "",
 	);
-	if (entries.length === 0) return;
+	if (entries.length === 0) return [];
 
 	const stagingUrl = `https://${projectName}.${PREVIEW_DOMAIN_SUFFIX}`;
-	p.log.step(`Pushing ${entries.length} env vars to Vercel...`);
-
 	const jobs = [];
 	for (const [key, value] of entries) {
 		if (key === "NEXT_PUBLIC_BASE_URL") {
@@ -512,9 +518,9 @@ async function pushEnvToVercel(targetDir, projectId, projectName) {
 			jobs.push(upsertVercelEnv(targetDir, projectId, key, value, ["development", "preview", "production"]));
 		}
 	}
-	await Promise.all(jobs);
-
-	p.log.success(`Env vars pushed. NEXT_PUBLIC_BASE_URL split per env — update production when domain is known.`);
+	const logs = (await Promise.all(jobs)).flat();
+	logs.push(["success", `${entries.length} env vars pushed. NEXT_PUBLIC_BASE_URL split per env — update production when domain is known.`]);
+	return logs;
 }
 
 async function upsertVercelEnv(targetDir, projectId, key, value, target) {
@@ -525,8 +531,18 @@ async function upsertVercelEnv(targetDir, projectId, key, value, target) {
 		{ key, value, target, type: "encrypted" },
 	);
 	if (status !== 0) {
-		p.log.warn(`Failed to push ${key}: ${stderr.trim() || "unknown error"}`);
+		return [["warn", `Failed to push ${key}: ${stderr.trim() || "unknown error"}`]];
 	}
+	return [];
+}
+
+// spawnAsync that rejects on non-zero exit, with stderr as the error message.
+async function run(cmd, args, opts) {
+	const result = await spawnAsync(cmd, args, opts);
+	if (result.status !== 0) {
+		throw new Error(result.stderr.trim() || `${cmd} ${args.join(" ")} exited with ${result.status}`);
+	}
+	return result;
 }
 
 function spawnAsync(cmd, args, { cwd, input, env, timeout = 30_000 } = {}) {
