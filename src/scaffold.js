@@ -1,8 +1,10 @@
 import { spawn, spawnSync } from "node:child_process";
+import { stripVTControlCharacters } from "node:util";
 import { randomBytes } from "node:crypto";
 import { copyFileSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import * as p from "@clack/prompts";
+import pc from "picocolors";
 
 const GITHUB_ORG = "Numbered-com";
 const VERCEL_SCOPE = "numbered-sandbox";
@@ -397,15 +399,17 @@ async function createGithubRepository(targetDir, projectName) {
 		process.exit(1);
 	}
 
-	s.message(`Creating private repo ${fullRepo} and pushing main...`);
-	const result = await spawnAsync(
+	const label = `Creating private repo ${fullRepo} and pushing main`;
+	const result = await spawnWithOutput(
+		s,
+		label,
 		"gh",
 		["repo", "create", fullRepo, "--private", "--source=.", "--remote=origin", "--push"],
 		{ cwd: targetDir, timeout: 120_000 },
 	);
 	if (result.status !== 0) {
 		s.error("GitHub repo creation failed.");
-		p.log.error(result.stderr.trim() || "unknown error");
+		printOutput(result, "error");
 		process.exit(1);
 	}
 
@@ -414,8 +418,10 @@ async function createGithubRepository(targetDir, projectName) {
 		await run("git", ["checkout", "-b", "staging"], { cwd: targetDir });
 		await run("git", ["push", "-u", "origin", "staging"], { cwd: targetDir, timeout: 120_000 });
 		s.stop(`Repo pushed: https://github.com/${fullRepo} (checked out on staging).`);
+		printOutput(result);
 	} catch (err) {
 		s.stop(`Repo pushed to main: https://github.com/${fullRepo}`);
+		printOutput(result);
 		p.log.warn(`Could not create staging branch: ${err.message}`);
 	}
 }
@@ -439,18 +445,21 @@ async function linkVercelProject(targetDir, projectName) {
 	s.start("Checking Vercel CLI...");
 	await ensureVercelInstalled(s);
 
-	s.message(`Linking Vercel project ${projectName} (scope: ${VERCEL_SCOPE})...`);
-	const result = await spawnAsync(
+	const label = `Linking Vercel project ${projectName} (scope: ${VERCEL_SCOPE})`;
+	const result = await spawnWithOutput(
+		s,
+		label,
 		"vercel",
 		["link", "--yes", "--project", projectName, "--scope", VERCEL_SCOPE],
 		{ cwd: targetDir, timeout: 300_000, env: VERCEL_ENV },
 	);
 	if (result.status !== 0) {
 		s.error("Vercel link failed.");
-		p.log.error(result.stderr.trim() || "unknown error");
+		printOutput(result, "error");
 		process.exit(1);
 	}
 	s.stop(`Vercel project linked: ${projectName} (scope: ${VERCEL_SCOPE}).`);
+	printOutput(result);
 }
 
 function readVercelProjectId(targetDir) {
@@ -472,7 +481,7 @@ function vercelApi(targetDir, method, path, body) {
 		args.push("--input", "-");
 		input = JSON.stringify(body);
 	}
-	return spawnAsync("vercel", args, { cwd: targetDir, input, env: VERCEL_ENV });
+	return spawnAsync("vercel", args, { cwd: targetDir, input, env: VERCEL_ENV, timeout: 30_000 });
 }
 
 // The Vercel setup helpers run concurrently under one spinner, so they return
@@ -545,21 +554,64 @@ async function run(cmd, args, opts) {
 	return result;
 }
 
-function spawnAsync(cmd, args, { cwd, input, env, timeout = 30_000 } = {}) {
+// Runs a command while the spinner keeps animating, showing the command's latest
+// output line next to the step label. Callers print the full output via printOutput.
+async function spawnWithOutput(s, label, cmd, args, opts) {
+	s.message(label);
+	const reserved = label.length + 12; // spinner frame, separator, animated dots
+	const result = await spawnAsync(cmd, args, {
+		...opts,
+		onLine: (line) => {
+			const width = Math.max((process.stdout.columns || 80) - reserved, 10);
+			const shown = line.length > width ? `${line.slice(0, width - 1)}…` : line;
+			s.message(`${label} ${pc.dim(`› ${shown}`)}`);
+		},
+	});
+	s.message(label);
+	return result;
+}
+
+// Prints a command's captured output (stdout and stderr, in arrival order) as a log block.
+// Progress lines redrawn with \r collapse to their final state.
+function printOutput({ output }, level = "message") {
+	const text = output
+		.split("\n")
+		.map((line) => line.split("\r").filter((part) => part.trim()).pop() ?? "")
+		.join("\n")
+		.trim();
+	if (text) p.log[level](level === "message" ? pc.dim(text) : text);
+}
+
+function spawnAsync(cmd, args, { cwd, input, env, timeout, onLine } = {}) {
 	return new Promise((resolve) => {
 		const child = spawn(cmd, args, { cwd, env, timeout });
 		let stdout = "";
 		let stderr = "";
+		let output = "";
 		let settled = false;
 		const done = (result) => {
 			if (settled) return;
 			settled = true;
 			resolve(result);
 		};
-		child.stdout.on("data", (d) => (stdout += d.toString()));
-		child.stderr.on("data", (d) => (stderr += d.toString()));
-		child.on("close", (status) => done({ status, stdout, stderr }));
-		child.on("error", (err) => done({ status: -1, stdout, stderr: err.message }));
+		const collect = (chunk) => {
+			const text = stripVTControlCharacters(chunk);
+			output += text;
+			if (!onLine) return;
+			// git/gh progress uses \r to redraw a line; treat it as a line break.
+			const line = text.split(/[\r\n]+/).map((l) => l.trim()).filter(Boolean).pop();
+			if (line) onLine(line);
+		};
+		child.stdout.on("data", (d) => {
+			stdout += d.toString();
+			collect(d.toString());
+		});
+		child.stderr.on("data", (d) => {
+			stderr += d.toString();
+			collect(d.toString());
+		});
+		child.on("close", (status) => done({ status, stdout, stderr, output }));
+		child.on("error", (err) => done({ status: -1, stdout, stderr: err.message, output: output + err.message }));
 		if (input !== undefined) {
 			child.stdin.on("error", () => {});
 			child.stdin.end(input);
